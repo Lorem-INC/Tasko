@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#6c5ce7">
+  <meta name="description" content="Tasko is a polished, offline-first task and reminder app.">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="icons/icon-192.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-192.svg">
+  <link rel="stylesheet" href="styles.css">
+  <title>Tasko — Make today count</title>
+</head>
+<body>
+  <div class="ambient ambient-one" aria-hidden="true"></div>
+  <div class="ambient ambient-two" aria-hidden="true"></div>
+
+  <div class="app-shell">
+    <aside class="sidebar glass-panel" aria-label="Primary navigation">
+      <a class="brand" href="#" aria-label="Tasko home">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 48 48"><path d="M14 25.5 21 32l14-17"/><circle cx="24" cy="24" r="20"/></svg>
+        </span>
+        <span>Tasko</span>
+      </a>
+
+      <button class="new-task-button ripple-button" type="button" data-open-task-modal>
+        <span aria-hidden="true">＋</span> New task
+      </button>
+
+      <nav class="nav-list" aria-label="Task sections">
+        <button class="nav-item active" type="button" data-view="today">
+          <span class="nav-icon" aria-hidden="true">☀</span><span>Today</span><span class="nav-count" data-count="today">0</span>
+        </button>
+        <button class="nav-item" type="button" data-view="upcoming">
+          <span class="nav-icon" aria-hidden="true">◷</span><span>Upcoming</span><span class="nav-count" data-count="upcoming">0</span>
+        </button>
+        <button class="nav-item" type="button" data-view="overdue">
+          <span class="nav-icon" aria-hidden="true">!</span><span>Overdue</span><span class="nav-count" data-count="overdue">0</span>
+        </button>
+        <button class="nav-item" type="button" data-view="completed">
+          <span class="nav-icon" aria-hidden="true">✓</span><span>Completed</span><span class="nav-count" data-count="completed">0</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-spacer"></div>
+      <div class="sidebar-note">
+        <span class="status-dot"></span>
+        <div><strong>Offline ready</strong><small>Reminders run while Tasko is open</small></div>
+      </div>
+      <button class="theme-toggle ripple-button" id="themeToggle" type="button" aria-label="Switch to dark mode">
+        <span class="theme-icon" aria-hidden="true">☾</span><span class="theme-label">Dark mode</span>
+      </button>
+    </aside>
+
+    <main class="main-content">
+      <header class="topbar glass-panel">
+        <div>
+          <p class="eyebrow" id="dateLabel"></p>
+          <h1 id="viewTitle">Today</h1>
+          <p class="view-subtitle" id="viewSubtitle">A clear view of what matters now.</p>
+        </div>
+        <div class="header-actions">
+          <label class="search-box">
+            <span aria-hidden="true">⌕</span>
+            <span class="sr-only">Search tasks</span>
+            <input id="searchInput" type="search" placeholder="Search tasks" autocomplete="off">
+            <kbd>/</kbd>
+          </label>
+          <button class="icon-button ripple-button" id="notificationButton" type="button" aria-label="Notification settings" title="Notification settings">♢<span class="permission-dot" aria-hidden="true"></span></button>
+          <button class="avatar-button ripple-button" id="headerThemeToggle" type="button" aria-label="Switch to dark mode" title="Toggle theme">☾</button>
+        </div>
+      </header>
+
+      <section class="dashboard" aria-label="Task overview">
+        <article class="progress-card glass-panel">
+          <div class="progress-ring" id="progressRing" style="--progress: 0">
+            <div><strong id="progressPercent">0%</strong><span>done</span></div>
+          </div>
+          <div>
+            <p class="card-kicker">Daily progress</p>
+            <h2 id="progressMessage">Fresh start</h2>
+            <p id="progressDetail">Add a task and build momentum.</p>
+          </div>
+        </article>
+        <div class="stat-grid">
+          <article class="stat-card glass-panel"><span class="stat-icon purple">◇</span><div><strong id="statTotal">0</strong><span>Total tasks</span></div></article>
+          <article class="stat-card glass-panel"><span class="stat-icon green">✓</span><div><strong id="statCompleted">0</strong><span>Done today</span></div></article>
+          <article class="stat-card glass-panel"><span class="stat-icon coral">!</span><div><strong id="statOverdue">0</strong><span>Overdue</span></div></article>
+          <article class="stat-card glass-panel"><span class="stat-icon blue">↗</span><div><strong id="statUpcoming">0</strong><span>Upcoming</span></div></article>
+        </div>
+      </section>
+
+      <section class="task-section" aria-labelledby="taskListHeading">
+        <div class="section-toolbar">
+          <div>
+            <h2 id="taskListHeading">Your tasks</h2>
+            <span id="resultCount">0 tasks</span>
+          </div>
+          <div class="filter-controls">
+            <label>
+              <span class="sr-only">Filter by priority</span>
+              <select id="priorityFilter">
+                <option value="all">All priorities</option>
+                <option value="urgent">Urgent</option>
+                <option value="high">High</option>
+                <option value="medium">Medium</option>
+                <option value="low">Low</option>
+              </select>
+            </label>
+            <label>
+              <span class="sr-only">Sort tasks</span>
+              <select id="sortSelect">
+                <option value="due-asc">Due date ↑</option>
+                <option value="due-desc">Due date ↓</option>
+                <option value="priority">Priority</option>
+                <option value="created">Recently added</option>
+              </select>
+            </label>
+          </div>
+        </div>
+
+        <div class="task-list" id="taskList" aria-live="polite"></div>
+        <div class="empty-state" id="emptyState" hidden>
+          <div class="empty-illustration" aria-hidden="true"><span>✓</span></div>
+          <h2>All clear here</h2>
+          <p id="emptyMessage">Nothing needs your attention right now.</p>
+          <button type="button" class="secondary-button ripple-button" data-open-task-modal>Add a task</button>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <button class="fab ripple-button" type="button" data-open-task-modal aria-label="Add a new task">＋</button>
+
+  <nav class="mobile-nav glass-panel" aria-label="Mobile navigation">
+    <button class="mobile-nav-item active" type="button" data-view="today"><span>☀</span>Today</button>
+    <button class="mobile-nav-item" type="button" data-view="upcoming"><span>◷</span>Upcoming</button>
+    <button class="mobile-nav-item" type="button" data-view="overdue"><span>!</span>Overdue</button>
+    <button class="mobile-nav-item" type="button" data-view="completed"><span>✓</span>Done</button>
+  </nav>
+
+  <div class="modal-backdrop" id="taskModal" hidden>
+    <section class="modal glass-panel" role="dialog" aria-modal="true" aria-labelledby="taskModalTitle">
+      <div class="modal-header">
+        <div><p class="card-kicker">Stay on track</p><h2 id="taskModalTitle">Add a task</h2></div>
+        <button type="button" class="close-button ripple-button" data-close-modal aria-label="Close">×</button>
+      </div>
+      <form id="taskForm">
+        <input type="hidden" id="taskId">
+        <label class="field full-field"><span>Task title</span><input id="taskTitle" name="title" maxlength="120" placeholder="What needs to be done?" required autofocus></label>
+        <label class="field full-field"><span>Notes <small>optional</small></span><textarea id="taskNotes" name="notes" maxlength="600" rows="3" placeholder="Add a little more context…"></textarea></label>
+        <div class="form-grid">
+          <label class="field"><span>Due date</span><input id="taskDate" name="date" type="date"></label>
+          <label class="field"><span>Due time</span><input id="taskTime" name="time" type="time"></label>
+          <label class="field"><span>Priority</span><select id="taskPriority" name="priority"><option value="low">Low</option><option value="medium" selected>Medium</option><option value="high">High</option><option value="urgent">Urgent</option></select></label>
+          <label class="field"><span>Category / list</span><input id="taskCategory" name="category" maxlength="40" list="categoryOptions" placeholder="Personal"></label>
+          <datalist id="categoryOptions"><option value="Personal"><option value="Work"><option value="Health"><option value="Shopping"><option value="Learning"></datalist>
+        </div>
+        <p class="form-hint">Set both a date and time to enable a reminder and live countdown.</p>
+        <div class="modal-actions">
+          <button type="button" class="ghost-button ripple-button" data-close-modal>Cancel</button>
+          <button type="submit" class="primary-button ripple-button" id="saveTaskButton">Create task</button>
+        </div>
+      </form>
+    </section>
+  </div>
+
+  <div class="modal-backdrop" id="permissionModal" hidden>
+    <section class="modal permission-modal glass-panel" role="dialog" aria-modal="true" aria-labelledby="permissionTitle">
+      <div class="permission-art" aria-hidden="true"><span>♢</span><i></i><i></i></div>
+      <p class="card-kicker">A helpful nudge</p>
+      <h2 id="permissionTitle">Never miss a deadline</h2>
+      <p>Allow Tasko to show browser notifications when a task is due. Reminders work while the app is open or running in the background.</p>
+      <div class="modal-actions centered">
+        <button type="button" class="ghost-button ripple-button" id="permissionLater">Maybe later</button>
+        <button type="button" class="primary-button ripple-button" id="enableNotifications">Enable reminders</button>
+      </div>
+    </section>
+  </div>
+
+  <div class="reminder-stack" id="reminderStack" aria-live="assertive"></div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden>
+    <span class="toast-icon">✓</span><span id="toastMessage">Task deleted</span>
+    <button id="toastAction" type="button" hidden>Undo</button>
+    <button id="toastClose" type="button" aria-label="Dismiss">×</button>
+  </div>
+
+  <div class="confetti-layer" id="confettiLayer" aria-hidden="true"></div>
+
+  <template id="taskCardTemplate">
+    <article class="task-card glass-panel">
+      <button class="check-button" type="button" aria-label="Mark task complete"><span>✓</span></button>
+      <div class="task-body">
+        <div class="task-title-row"><h3></h3><span class="priority-badge"></span></div>
+        <p class="task-notes"></p>
+        <div class="task-meta"></div>
+      </div>
+      <div class="task-side">
+        <span class="countdown"></span>
+        <div class="task-actions">
+          <button type="button" data-action="edit" aria-label="Edit task" title="Edit">✎</button>
+          <button type="button" data-action="delete" aria-label="Delete task" title="Delete">⌫</button>
+        </div>
+      </div>
+    </article>
+  </template>
+
+  <script src="db.js" defer></script>
+  <script src="notifications.js" defer></script>
+  <script src="app.js" defer></script>
+</body>
+</html>

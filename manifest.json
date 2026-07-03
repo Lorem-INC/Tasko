@@ -1,0 +1,21 @@
+{
+  "name": "Tasko — Tasks & Reminders",
+  "short_name": "Tasko",
+  "description": "A polished, offline-first task and reminder app.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
+  "background_color": "#f5f3ff",
+  "theme_color": "#6c5ce7",
+  "orientation": "any",
+  "categories": ["productivity", "utilities"],
+  "icons": [
+    {"src": "icons/icon-192.svg", "sizes": "192x192", "type": "image/svg+xml", "purpose": "any maskable"},
+    {"src": "icons/icon-512.svg", "sizes": "512x512", "type": "image/svg+xml", "purpose": "any maskable"}
+  ],
+  "shortcuts": [
+    {"name": "Add a task", "short_name": "New task", "url": "./index.html?action=new", "icons": [{"src": "icons/icon-192.svg", "sizes": "192x192", "type": "image/svg+xml"}]},
+    {"name": "View upcoming", "short_name": "Upcoming", "url": "./index.html?view=upcoming", "icons": [{"src": "icons/icon-192.svg", "sizes": "192x192", "type": "image/svg+xml"}]}
+  ]
+}
