@@ -1,4 +1,4 @@
-const CACHE_NAME = "tasko-shell-v1";
+const CACHE_NAME = "tasko-shell-v4";
 const APP_SHELL = [
   "./",
   "./index.html",
