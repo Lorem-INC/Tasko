@@ -32,10 +32,10 @@
 
       <nav class="nav-list" aria-label="Task sections">
         <button class="nav-item active" type="button" data-view="today">
-          <span class="nav-icon" aria-hidden="true">☀</span><span>Today</span><span class="nav-count" data-count="today">0</span>
+          <span class="nav-icon" aria-hidden="true">T</span><span>Tasks</span><span class="nav-count" data-count="today">0</span>
         </button>
-        <button class="nav-item" type="button" data-view="upcoming">
-          <span class="nav-icon" aria-hidden="true">◷</span><span>Upcoming</span><span class="nav-count" data-count="upcoming">0</span>
+        <button class="nav-item" type="button" data-view="progress">
+          <span class="nav-icon" aria-hidden="true">%</span><span>Progress</span><span class="nav-count" data-count="progress">0</span>
         </button>
         <button class="nav-item" type="button" data-view="overdue">
           <span class="nav-icon" aria-hidden="true">!</span><span>Overdue</span><span class="nav-count" data-count="overdue">0</span>
@@ -62,7 +62,7 @@
       <header class="topbar glass-panel">
         <div>
           <p class="eyebrow" id="dateLabel"></p>
-          <h1 id="viewTitle">Today</h1>
+          <h1 id="viewTitle">Tasks</h1>
           <p class="view-subtitle" id="viewSubtitle">A clear view of what matters now.</p>
         </div>
         <div class="header-actions">
@@ -165,6 +165,23 @@
         </div>
       </section>
 
+      <section class="progress-section" id="progressSection" aria-labelledby="progressListHeading" hidden>
+        <div class="progress-toolbar">
+          <div>
+            <h2 id="progressListHeading">Progress cards</h2>
+            <span id="progressResultCount">0 cards</span>
+          </div>
+          <button type="button" class="secondary-button ripple-button" data-open-progress-modal>Add card</button>
+        </div>
+        <div class="progress-list" id="progressList" aria-live="polite"></div>
+        <div class="empty-state" id="progressEmptyState" hidden>
+          <div class="empty-illustration" aria-hidden="true"><span>%</span></div>
+          <h2>No progress cards yet</h2>
+          <p>Track repeatable work here without due dates or deadline pressure.</p>
+          <button type="button" class="secondary-button ripple-button" data-open-progress-modal>Add a progress card</button>
+        </div>
+      </section>
+
       <section class="logs-section" id="logsSection" aria-labelledby="logsTitle" hidden>
         <header class="logs-header">
           <p class="log-prompt">tasko://activity/log</p>
@@ -196,8 +213,8 @@
   <button class="fab ripple-button" type="button" data-open-task-modal aria-label="Add a new task">＋</button>
 
   <nav class="mobile-nav glass-panel" aria-label="Mobile navigation">
-    <button class="mobile-nav-item active" type="button" data-view="today"><span>☀</span>Today</button>
-    <button class="mobile-nav-item" type="button" data-view="upcoming"><span>◷</span>Upcoming</button>
+    <button class="mobile-nav-item active" type="button" data-view="today"><span>T</span>Tasks</button>
+    <button class="mobile-nav-item" type="button" data-view="progress"><span>%</span>Progress</button>
     <button class="mobile-nav-item" type="button" data-view="overdue"><span>!</span>Overdue</button>
     <button class="mobile-nav-item" type="button" data-view="completed"><span>✓</span>Done</button>
     <button class="mobile-nav-item" type="button" data-view="logs"><span>›_</span>Logs</button>
@@ -223,8 +240,8 @@
           <textarea id="taskNotes" name="notes" maxlength="600" rows="4" placeholder="Add notes or turn lines into a list…"></textarea>
         </div>
         <div class="form-grid">
-          <label class="field"><span>Due date</span><input id="taskDate" name="date" type="date"></label>
-          <label class="field"><span>Due time</span><input id="taskTime" name="time" type="time"></label>
+          <label class="field timeline-field"><span>Due date</span><input id="taskDate" name="date" type="date"></label>
+          <label class="field timeline-field"><span>Due time</span><input id="taskTime" name="time" type="time"></label>
           <label class="field"><span>Priority</span><select id="taskPriority" name="priority"><option value="low">Low</option><option value="medium" selected>Medium</option><option value="high">High</option><option value="urgent">Urgent</option></select></label>
           <label class="field"><span>Category / list</span><input id="taskCategory" name="category" maxlength="40" list="categoryOptions" placeholder="Personal"></label>
           <datalist id="categoryOptions"><option value="Personal"><option value="Work"><option value="Health"><option value="Shopping"><option value="Learning"></datalist>
@@ -248,6 +265,28 @@
         <button type="button" class="ghost-button ripple-button" id="permissionLater">Maybe later</button>
         <button type="button" class="primary-button ripple-button" id="enableNotifications">Enable reminders</button>
       </div>
+    </section>
+  </div>
+
+  <div class="modal-backdrop" id="notePreviewModal" hidden>
+    <section class="modal note-preview-modal glass-panel" role="dialog" aria-modal="true" aria-labelledby="notePreviewTitle">
+      <div class="modal-header">
+        <div><p class="card-kicker" id="notePreviewCategory">Task notes</p><h2 id="notePreviewTitle">Task</h2></div>
+        <button type="button" class="close-button ripple-button" data-close-note-preview aria-label="Close">×</button>
+      </div>
+      <div class="note-preview-meta" id="notePreviewMeta"></div>
+      <div class="note-preview-body" id="notePreviewBody"></div>
+    </section>
+  </div>
+
+  <div class="modal-backdrop" id="penaltySnoozeModal" hidden>
+    <section class="modal penalty-snooze-modal glass-panel" role="dialog" aria-modal="true" aria-labelledby="penaltySnoozeTitle">
+      <div class="modal-header">
+        <div><p class="card-kicker">Pause deductions</p><h2 id="penaltySnoozeTitle">Snooze points</h2></div>
+        <button type="button" class="close-button ripple-button" data-close-penalty-snooze aria-label="Close">×</button>
+      </div>
+      <p class="snooze-copy">Pick how many days Tasko should wait before deducting stars for this overdue task.</p>
+      <div class="snooze-options" id="penaltySnoozeOptions"></div>
     </section>
   </div>
 

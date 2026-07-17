@@ -18,12 +18,18 @@
     cycleStartedAt: null,
     cyclesCompleted: 0,
     starAnimationFrame: null,
-    starAnimationTimer: null
+    starAnimationTimer: null,
+    modalMode: "task",
+    activePenaltySnoozeTaskId: null,
+    notePreviewOpen: false,
+    progressDrag: null,
+    suppressProgressClick: false,
+    progressAnimationFrom: new Map()
   };
 
   const viewCopy = {
-    today: ["Today", "A clear view of what matters now."],
-    upcoming: ["Upcoming", "See what is waiting around the corner."],
+    today: ["Tasks", "Today and upcoming tasks, arranged in one clean flow."],
+    progress: ["Progress", "Move long-running work forward one smooth step at a time."],
     overdue: ["Overdue", "A gentle nudge to bring these back on track."],
     completed: ["Completed", "Small wins add up. Here are yours."],
     logs: ["Logs", "A private local record of deductions and cleanup."]
@@ -39,6 +45,7 @@
   const HOUR_MS = 60 * 60 * 1000;
   const DAY_MS = 24 * HOUR_MS;
   const COMPLETED_RETENTION_MS = 30 * DAY_MS;
+  const PROGRESS_DONE_DELAY_MS = 30 * 60 * 1000;
   const STAR_CYCLE_TARGET = 100000;
   const REWARD_POINTS = { low: 5, medium: 10, high: 20, urgent: 35 };
   const PENALTY_POINTS = { low: 1, medium: 2, high: 4, urgent: 7 };
@@ -60,6 +67,30 @@
 
   function dateKey(date = new Date()) {
     return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  }
+
+  function isProgressTask(task) {
+    return task.type === "progress";
+  }
+
+  function isDeadlineTask(task) {
+    return !isProgressTask(task);
+  }
+
+  function taskCategory(task) {
+    return (task.category || "General").trim() || "General";
+  }
+
+  function normalizeProgress(task) {
+    return Math.max(0, Math.min(100, Number(task.progress || 0)));
+  }
+
+  function progressReadyForDone(task, now = new Date()) {
+    return isProgressTask(task) && task.completed && task.completedAt && now - new Date(task.completedAt) >= PROGRESS_DONE_DELAY_MS;
+  }
+
+  function notesNeedPreview(task) {
+    return Boolean(task.notes) && (task.notes.length > 120 || task.notes.split("\n").length > 3);
   }
 
   function safeNumber(key) {
@@ -277,10 +308,11 @@
   }
 
   function taskMatchesView(task) {
-    if (state.view === "completed") return task.completed;
+    if (state.view === "progress") return isProgressTask(task);
+    if (state.view === "completed") return isDeadlineTask(task) ? task.completed : progressReadyForDone(task);
+    if (!isDeadlineTask(task)) return false;
     if (state.view === "overdue") return isOverdue(task);
-    if (state.view === "upcoming") return isUpcoming(task);
-    return isTodayTask(task);
+    return !task.completed && (isTodayTask(task) || isUpcoming(task));
   }
 
   function dueValue(task) {
@@ -288,8 +320,17 @@
     return deadline ? deadline.getTime() : Number.MAX_SAFE_INTEGER;
   }
 
-  function visibleTasks() {
+  function sortDeadlineTasks(tasks) {
     const priorityWeight = { urgent: 4, high: 3, medium: 2, low: 1 };
+    return [...tasks].sort((a, b) => {
+      if (state.sort === "due-desc") return dueValue(b) - dueValue(a);
+      if (state.sort === "priority") return priorityWeight[b.priority] - priorityWeight[a.priority] || dueValue(a) - dueValue(b);
+      if (state.sort === "created") return new Date(b.createdAt) - new Date(a.createdAt);
+      return dueValue(a) - dueValue(b);
+    });
+  }
+
+  function visibleTasks() {
     const query = state.query.trim().toLowerCase();
     const tasks = state.tasks.filter(task => {
       if (!taskMatchesView(task)) return false;
@@ -298,12 +339,7 @@
       return [task.title, task.notes, task.category, task.priority].some(value => (value || "").toLowerCase().includes(query));
     });
 
-    return tasks.sort((a, b) => {
-      if (state.sort === "due-desc") return dueValue(b) - dueValue(a);
-      if (state.sort === "priority") return priorityWeight[b.priority] - priorityWeight[a.priority] || dueValue(a) - dueValue(b);
-      if (state.sort === "created") return new Date(b.createdAt) - new Date(a.createdAt);
-      return dueValue(a) - dueValue(b);
-    });
+    return sortDeadlineTasks(tasks);
   }
 
   function formatDate(task) {
@@ -350,11 +386,67 @@
     return span;
   }
 
+  function isPenaltySnoozed(task, now = new Date()) {
+    return Boolean(task.penaltySnoozedUntil) && new Date(task.penaltySnoozedUntil) > now;
+  }
+
+  function formatSnoozeUntil(task) {
+    return new Date(task.penaltySnoozedUntil).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  }
+
+  function categoryDescription(name) {
+    const lower = name.toLowerCase();
+    if (lower.includes("learn") || lower.includes("study")) return "Academic subjects and study tasks";
+    if (lower.includes("work") || lower.includes("office")) return "Practical and professional tasks";
+    if (lower.includes("health") || lower.includes("fitness")) return "Care, energy, and routines";
+    if (lower.includes("shop")) return "Errands and things to collect";
+    if (lower.includes("personal")) return "Personal focus and life admin";
+    return "Tasks grouped from this list";
+  }
+
+  function groupByCategory(tasks) {
+    const groups = new Map();
+    tasks.forEach(task => {
+      const category = taskCategory(task);
+      if (!groups.has(category)) groups.set(category, []);
+      groups.get(category).push(task);
+    });
+    return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b));
+  }
+
+  function buildCategoryGroup(title, tasks, options = {}) {
+    const group = document.createElement("article");
+    group.className = `task-category-group glass-panel ${options.className || ""}`.trim();
+    const header = document.createElement("header");
+    header.className = "task-category-header";
+    const icon = document.createElement("span");
+    icon.className = "task-category-icon";
+    icon.textContent = options.icon || title.charAt(0).toUpperCase();
+    const copy = document.createElement("div");
+    const heading = document.createElement("h3");
+    heading.textContent = title;
+    const detail = document.createElement("p");
+    detail.textContent = options.description || categoryDescription(title);
+    copy.append(heading, detail);
+    const count = document.createElement("span");
+    count.className = "task-category-count";
+    count.textContent = `${tasks.length} ${tasks.length === 1 ? "task" : "tasks"}`;
+    header.append(icon, copy, count);
+    const list = document.createElement("div");
+    list.className = options.listClass || "category-task-list";
+    group.append(header, list);
+    return { group, list };
+  }
+
   function buildTaskCard(task, index) {
     const card = $("#taskCardTemplate").content.firstElementChild.cloneNode(true);
     card.dataset.id = task.id;
     card.style.animationDelay = window.innerWidth <= 720 ? "0ms" : `${Math.min(index * 35, 210)}ms`;
     if (task.completed) card.classList.add("completed");
+    if (notesNeedPreview(task)) {
+      card.classList.add("has-note-preview");
+      card.classList.add("has-long-notes");
+    }
 
     const check = card.querySelector(".check-button");
     check.dataset.action = "toggle";
@@ -372,6 +464,7 @@
       meta.append(createMetaChip(`◷ ${formatDate(task)}${task.dueTime ? ` · ${formatTime(task.dueTime)}` : ""}`, overdueClass));
     }
     if (task.category) meta.append(createMetaChip(task.category, "category"));
+    if (isPenaltySnoozed(task)) meta.append(createMetaChip(`Snoozed until ${formatSnoozeUntil(task)}`, "snoozed"));
     if (task.completedAt) meta.append(createMetaChip(`✓ ${new Date(task.completedAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}`));
 
     const countdown = card.querySelector(".countdown");
@@ -380,7 +473,160 @@
     countdown.textContent = countdownState.text;
     if (countdownState.className) countdown.classList.add(countdownState.className);
     if (!countdownState.text) countdown.hidden = true;
+
+    const actions = card.querySelector(".task-actions");
+    if (isOverdue(task)) {
+      const snoozeButton = document.createElement("button");
+      snoozeButton.type = "button";
+      snoozeButton.dataset.action = "penalty-snooze";
+      snoozeButton.setAttribute("aria-label", "Snooze point deductions");
+      snoozeButton.title = "Snooze point deductions";
+      snoozeButton.textContent = "Pause";
+      actions.prepend(snoozeButton);
+    }
     return card;
+  }
+
+  function renderTaskGroups(tasks) {
+    const fragment = document.createDocumentFragment();
+    const appendGroup = (title, groupedTasks, options) => {
+      if (!groupedTasks.length) return;
+      const { group, list } = buildCategoryGroup(title, groupedTasks, options);
+      groupedTasks.forEach((task, index) => list.append(buildTaskCard(task, index)));
+      fragment.append(group);
+    };
+
+    if (state.view === "today") {
+      appendGroup("Today", tasks.filter(isTodayTask), { icon: "T", description: "Due today and undated tasks" });
+      appendGroup("Upcoming", tasks.filter(isUpcoming), { icon: "U", description: "Future deadlines queued below today" });
+      return fragment;
+    }
+
+    groupByCategory(tasks).forEach(([category, categoryTasks]) => {
+      appendGroup(category, categoryTasks, { icon: category.charAt(0).toUpperCase() });
+    });
+    return fragment;
+  }
+
+  function formatCreatedAt(task) {
+    const date = new Date(task.createdAt || task.updatedAt || Date.now());
+    return date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  }
+
+  function visibleProgressTasks() {
+    const query = state.query.trim().toLowerCase();
+    return state.tasks
+      .filter(isProgressTask)
+      .filter(task => !progressReadyForDone(task))
+      .filter(task => state.priority === "all" || task.priority === state.priority)
+      .filter(task => {
+        if (!query) return true;
+        return [task.title, task.notes, task.category, task.priority].some(value => (value || "").toLowerCase().includes(query));
+      })
+      .sort((a, b) => {
+        const categorySort = taskCategory(a).localeCompare(taskCategory(b));
+        if (categorySort) return categorySort;
+        return (a.progressOrder || 0) - (b.progressOrder || 0) || new Date(a.createdAt) - new Date(b.createdAt);
+      });
+  }
+
+  function buildProgressCard(task) {
+    const progress = normalizeProgress(task);
+    const animatedFrom = state.progressAnimationFrom.has(task.id) ? state.progressAnimationFrom.get(task.id) : progress;
+    const card = document.createElement("article");
+    card.className = "progress-task-card glass-panel";
+    card.dataset.id = task.id;
+    card.dataset.progressTarget = progress;
+    card.style.setProperty("--progress", animatedFrom);
+    if (task.completed) card.classList.add("completed");
+    if (notesNeedPreview(task)) card.classList.add("has-note-preview");
+
+    const handle = document.createElement("button");
+    handle.className = "drag-handle";
+    handle.type = "button";
+    handle.setAttribute("aria-label", "Reorder progress card");
+    handle.textContent = "≡";
+
+    const body = document.createElement("div");
+    body.className = "progress-task-body";
+    const titleRow = document.createElement("div");
+    titleRow.className = "task-title-row";
+    const title = document.createElement("h3");
+    title.textContent = task.title;
+    const badge = document.createElement("span");
+    badge.className = `priority-badge priority-${task.priority}`;
+    badge.textContent = task.priority;
+    titleRow.append(title, badge);
+    const notes = document.createElement("p");
+    notes.className = "task-notes";
+    notes.textContent = task.notes || "";
+    const meta = document.createElement("div");
+    meta.className = "task-meta";
+    meta.append(createMetaChip(`Created ${formatCreatedAt(task)}`));
+    if (task.category) meta.append(createMetaChip(task.category, "category"));
+    if (task.completedAt) meta.append(createMetaChip(`✓ ${new Date(task.completedAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}`));
+    body.append(titleRow, notes, meta);
+
+    const meter = document.createElement("div");
+    meter.className = "progress-circle";
+    const meterInner = document.createElement("div");
+    meterInner.innerHTML = `<strong>${progress}%</strong><span>${task.completed ? "done" : "progress"}</span>`;
+    meter.append(meterInner);
+
+    const controls = document.createElement("div");
+    controls.className = "progress-controls";
+    [
+      ["-10", -10],
+      ["+5", 5],
+      ["+10", 10],
+      ["+50", 50]
+    ].forEach(([label, amount]) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.dataset.progressDelta = amount;
+      button.textContent = label;
+      controls.append(button);
+    });
+    const done = document.createElement("button");
+    done.type = "button";
+    done.dataset.progressDone = "true";
+    done.textContent = task.completed ? "Done" : "Complete";
+    controls.append(done);
+    [["progressEdit", "Edit"], ["progressDelete", "Delete"]].forEach(([key, label]) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.dataset[key] = "true";
+      button.textContent = label;
+      controls.append(button);
+    });
+
+    card.append(handle, body, meter, controls);
+    return card;
+  }
+
+  function renderProgress() {
+    const cards = visibleProgressTasks();
+    const list = $("#progressList");
+    const fragment = document.createDocumentFragment();
+    groupByCategory(cards).forEach(([category, categoryTasks]) => {
+      const ordered = [...categoryTasks].sort((a, b) => (a.progressOrder || 0) - (b.progressOrder || 0));
+      const { group, list: groupList } = buildCategoryGroup(category, ordered, {
+        icon: category.charAt(0).toUpperCase(),
+        listClass: "progress-card-stack"
+      });
+      ordered.forEach(task => groupList.append(buildProgressCard(task)));
+      fragment.append(group);
+    });
+    list.replaceChildren(fragment);
+    requestAnimationFrame(() => {
+      $$(".progress-task-card[data-progress-target]").forEach(card => {
+        card.style.setProperty("--progress", card.dataset.progressTarget);
+      });
+      state.progressAnimationFrom.clear();
+    });
+    $("#progressResultCount").textContent = `${cards.length} ${cards.length === 1 ? "card" : "cards"}`;
+    $("#progressEmptyState").hidden = cards.length > 0;
+    list.hidden = cards.length === 0;
   }
 
   function renderLogs() {
@@ -403,7 +649,8 @@
       const detail = document.createElement("span");
       if (log.type === "penalty") {
         const grace = log.graceDays ? ` · ${log.graceDays}d grace elapsed` : "";
-        detail.textContent = `${(log.priority || "task").toUpperCase()} · ${log.overdueHours || 0}h overdue${grace} · interval ${log.interval || 1}`;
+        const snooze = log.snoozedUntil ? ` · snoozed until ${new Date(log.snoozedUntil).toLocaleDateString(undefined, { month: "short", day: "numeric" })}` : "";
+        detail.textContent = `${(log.priority || "task").toUpperCase()} · ${log.overdueHours || 0}h overdue${grace}${snooze} · interval ${log.interval || 1}`;
       } else if (log.type === "cleanup") {
         const completedDate = log.completedAt ? new Date(log.completedAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "unknown";
         detail.textContent = `Completed ${completedDate} · removed after 30 days`;
@@ -428,10 +675,13 @@
 
   function render() {
     const logsMode = state.view === "logs";
+    const progressMode = state.view === "progress";
     document.body.classList.toggle("logs-mode", logsMode);
-    $("#dashboardSection").hidden = logsMode;
-    $("#milestoneSection").hidden = logsMode;
-    $("#taskSection").hidden = logsMode;
+    document.body.classList.toggle("progress-mode", progressMode);
+    $("#dashboardSection").hidden = logsMode || progressMode;
+    $("#milestoneSection").hidden = logsMode || progressMode;
+    $("#taskSection").hidden = logsMode || progressMode;
+    $("#progressSection").hidden = !progressMode;
     $("#logsSection").hidden = !logsMode;
     if (logsMode) {
       renderLogs();
@@ -439,16 +689,22 @@
       updateStats();
       return;
     }
+    if (progressMode) {
+      renderProgress();
+      updateHeader();
+      updateStats();
+      return;
+    }
     const tasks = visibleTasks();
     const list = $("#taskList");
-    list.replaceChildren(...tasks.map(buildTaskCard));
+    if (state.view === "completed") list.replaceChildren(...tasks.map(buildTaskCard));
+    else list.replaceChildren(renderTaskGroups(tasks));
     $("#resultCount").textContent = `${tasks.length} ${tasks.length === 1 ? "task" : "tasks"}`;
     $("#emptyState").hidden = tasks.length > 0;
     list.hidden = tasks.length === 0;
 
     const emptyMessages = {
-      today: "Your day is open. Add a task when inspiration strikes.",
-      upcoming: "No future deadlines are waiting for you.",
+      today: "Your task lane is open. Add today or future work when inspiration strikes.",
       overdue: "Lovely — nothing has slipped past its deadline.",
       completed: "Complete a task and it will settle in here."
     };
@@ -467,15 +723,16 @@
 
   function updateStats() {
     const today = dateKey();
-    const active = state.tasks.filter(task => !task.completed);
+    const deadlineTasks = state.tasks.filter(isDeadlineTask);
+    const active = deadlineTasks.filter(task => !task.completed);
     const overdue = active.filter(task => isOverdue(task));
     const upcoming = active.filter(task => isUpcoming(task));
-    const todayTasks = state.tasks.filter(task => !task.dueDate || task.dueDate === today);
+    const todayTasks = deadlineTasks.filter(task => !task.dueDate || task.dueDate === today);
     const todayDone = todayTasks.filter(task => task.completed).length;
-    const completedToday = state.tasks.filter(task => task.completedAt && dateKey(new Date(task.completedAt)) === today).length;
+    const completedToday = deadlineTasks.filter(task => task.completedAt && dateKey(new Date(task.completedAt)) === today).length;
     const progress = todayTasks.length ? Math.round((todayDone / todayTasks.length) * 100) : 0;
 
-    $("#statTotal").textContent = state.tasks.length;
+    $("#statTotal").textContent = deadlineTasks.length;
     $("#statCompleted").textContent = completedToday;
     $("#statOverdue").textContent = overdue.length;
     $("#statUpcoming").textContent = upcoming.length;
@@ -494,10 +751,11 @@
     }
 
     const counts = {
-      today: active.filter(isTodayTask).length,
+      today: active.filter(task => isTodayTask(task) || isUpcoming(task)).length,
+      progress: state.tasks.filter(task => isProgressTask(task) && !progressReadyForDone(task)).length,
       upcoming: upcoming.length,
       overdue: overdue.length,
-      completed: state.tasks.filter(task => task.completed).length,
+      completed: deadlineTasks.filter(task => task.completed).length + state.tasks.filter(progressReadyForDone).length,
       logs: state.logs.length
     };
     Object.entries(counts).forEach(([key, value]) => {
@@ -507,29 +765,36 @@
   }
 
   function setView(view) {
+    if (view === "upcoming") view = "today";
     if (!viewCopy[view]) return;
     state.view = view;
     render();
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  function openTaskModal(task = null) {
+  function openTaskModal(task = null, mode = null) {
+    const progressMode = isProgressTask(task || {}) || mode === "progress";
+    state.modalMode = progressMode ? "progress" : "task";
     const form = $("#taskForm");
     form.reset();
+    $("#taskModal").classList.toggle("progress-entry", progressMode);
     $("#taskId").value = task?.id || "";
-    $("#taskModalTitle").textContent = task ? "Edit task" : "Add a task";
+    $("#taskModalTitle").textContent = task ? (progressMode ? "Edit progress card" : "Edit task") : (progressMode ? "Add progress card" : "Add a task");
     $("#saveTaskButton").textContent = task ? "Save changes" : "Create task";
     if (task) {
       $("#taskTitle").value = task.title;
       $("#taskNotes").value = task.notes || "";
-      $("#taskDate").value = task.dueDate || "";
-      $("#taskTime").value = task.dueTime || "";
+      $("#taskDate").value = progressMode ? "" : (task.dueDate || "");
+      $("#taskTime").value = progressMode ? "" : (task.dueTime || "");
       $("#taskPriority").value = task.priority || "medium";
       $("#taskCategory").value = task.category || "";
     } else {
-      $("#taskDate").value = state.view === "today" ? dateKey() : "";
+      $("#taskDate").value = !progressMode && state.view === "today" ? dateKey() : "";
       $("#taskPriority").value = "medium";
     }
+    $(".form-hint").textContent = progressMode
+      ? "Progress cards award stars once when completed: Low +5, Medium +10, High +20, Urgent +35."
+      : "Completion rewards: Low +5, Medium +10, High +20, Urgent +35 stars.";
     $("#taskModal").hidden = false;
     document.body.style.overflow = "hidden";
     requestAnimationFrame(() => $("#taskTitle").focus());
@@ -537,6 +802,8 @@
 
   function closeTaskModal() {
     $("#taskModal").hidden = true;
+    $("#taskModal").classList.remove("progress-entry");
+    state.modalMode = "task";
     document.body.style.overflow = "";
   }
 
@@ -544,12 +811,14 @@
     event.preventDefault();
     const id = $("#taskId").value;
     const existing = state.tasks.find(task => task.id === id);
-    const dueDate = $("#taskDate").value;
-    const dueTime = $("#taskTime").value;
-    const deadlineChanged = existing && (existing.dueDate !== dueDate || existing.dueTime !== dueTime);
+    const progressMode = state.modalMode === "progress";
+    const dueDate = progressMode ? "" : $("#taskDate").value;
+    const dueTime = progressMode ? "" : $("#taskTime").value;
+    const deadlineChanged = existing && !progressMode && (existing.dueDate !== dueDate || existing.dueTime !== dueTime);
     const now = new Date().toISOString();
     const task = {
       id: id || TaskoDB.makeId(),
+      type: progressMode ? "progress" : "task",
       title: $("#taskTitle").value.trim(),
       notes: $("#taskNotes").value.trim(),
       dueDate,
@@ -563,10 +832,13 @@
       reminderFiredAt: deadlineChanged ? null : (existing?.reminderFiredAt || null),
       rewardGranted: existing?.rewardGranted || false,
       pointsEarned: existing?.pointsEarned || 0,
+      progress: progressMode ? normalizeProgress(existing || {}) : undefined,
+      progressOrder: progressMode ? (existing?.progressOrder || Date.now()) : undefined,
       penaltyTotal: existing?.penaltyTotal || 0,
       penaltyIntervalsApplied: deadlineChanged ? 0 : (existing?.penaltyIntervalsApplied || 0),
       penaltyCyclePoints: deadlineChanged ? 0 : (existing?.penaltyCyclePoints || 0),
-      penaltyCycleKey: deadlineChanged ? null : (existing?.penaltyCycleKey || null)
+      penaltyCycleKey: deadlineChanged ? null : (existing?.penaltyCycleKey || null),
+      penaltySnoozedUntil: deadlineChanged ? null : (existing?.penaltySnoozedUntil || null)
     };
     if (!task.title) return;
 
@@ -603,6 +875,46 @@
     becomingComplete ? setTimeout(finish, 480) : finish();
   }
 
+  async function finishProgressTask(task) {
+    let reward = 0;
+    let cycleCompleted = false;
+    const previousProgress = normalizeProgress(task);
+    state.progressAnimationFrom.set(task.id, previousProgress);
+    task.progress = 100;
+    if (!task.completed) {
+      task.completed = true;
+      task.completedAt = new Date().toISOString();
+    }
+    if (!task.rewardGranted) {
+      reward = REWARD_POINTS[task.priority] || REWARD_POINTS.medium;
+      task.rewardGranted = true;
+      task.pointsEarned = reward;
+      cycleCompleted = awardCompletionStars(reward, task);
+    }
+    await TaskoDB.put(task);
+    render();
+    showToast(cycleCompleted
+      ? `100K cycle ${state.cyclesCompleted} complete — stars reset`
+      : (reward ? `+${reward} stars · Progress completed` : "Progress completed"));
+  }
+
+  async function updateProgressTask(task, delta) {
+    const previousProgress = normalizeProgress(task);
+    const nextProgress = Math.max(0, Math.min(100, previousProgress + delta));
+    if (nextProgress !== previousProgress) state.progressAnimationFrom.set(task.id, previousProgress);
+    task.progress = nextProgress;
+    if (nextProgress < 100) {
+      task.completed = false;
+      task.completedAt = null;
+    }
+    if (nextProgress >= 100) {
+      await finishProgressTask(task);
+      return;
+    }
+    await TaskoDB.put(task);
+    render();
+  }
+
   async function deleteTask(task, card) {
     card?.classList.add("is-deleting");
     await new Promise(resolve => setTimeout(resolve, card ? 360 : 0));
@@ -620,7 +932,7 @@
   }
 
   function maybeCelebrate() {
-    const todayTasks = state.tasks.filter(task => !task.dueDate || task.dueDate === dateKey());
+    const todayTasks = state.tasks.filter(task => isDeadlineTask(task) && (!task.dueDate || task.dueDate === dateKey()));
     if (!todayTasks.length || !todayTasks.every(task => task.completed) || state.confettiPlayed) return;
     state.confettiPlayed = true;
     launchConfetti();
@@ -699,9 +1011,11 @@
       if (!isOverdue(task, now)) continue;
       const deadline = parseDeadline(task);
       const graceDays = penaltyGraceDays(task);
-      const penaltyStart = new Date(deadline.getTime() + graceDays * DAY_MS);
+      const graceStart = new Date(deadline.getTime() + graceDays * DAY_MS);
+      const snoozedUntil = task.penaltySnoozedUntil ? new Date(task.penaltySnoozedUntil) : null;
+      const penaltyStart = snoozedUntil && snoozedUntil > graceStart ? snoozedUntil : graceStart;
       if (now < penaltyStart) continue;
-      const cycleKey = `${deadline.toISOString()}|${graceDays}`;
+      const cycleKey = `${deadline.toISOString()}|${graceDays}|${penaltyStart.toISOString()}`;
       if (!task.penaltyCycleKey && graceDays === 0 && task.penaltyCycleDeadline === deadline.toISOString()) task.penaltyCycleKey = cycleKey;
       if (task.penaltyCycleKey !== cycleKey) {
         task.penaltyCycleKey = cycleKey;
@@ -722,7 +1036,7 @@
       task.penaltyTotal = (task.penaltyTotal || 0) + actualDeduction;
       updatedTasks += 1;
       await TaskoDB.put(task);
-      if (actualDeduction > 0) penaltyLogs.push({ type: "penalty", taskTitle: task.title, taskId: task.id, points: actualDeduction, priority: task.priority, graceDays, interval: intervals, overdueHours: Math.max(1, Math.floor((now - deadline) / HOUR_MS)) });
+      if (actualDeduction > 0) penaltyLogs.push({ type: "penalty", taskTitle: task.title, taskId: task.id, points: actualDeduction, priority: task.priority, graceDays, snoozedUntil: task.penaltySnoozedUntil || null, interval: intervals, overdueHours: Math.max(1, Math.floor((now - deadline) / HOUR_MS)) });
     }
     if (totalDeducted) {
       changeStars(-totalDeducted);
@@ -825,6 +1139,75 @@
     dismissReminder(task.id);
   }
 
+  function openNotePreview(task) {
+    if (!task?.notes) return;
+    $("#notePreviewTitle").textContent = task.title;
+    $("#notePreviewCategory").textContent = taskCategory(task);
+    $("#notePreviewBody").textContent = task.notes;
+    const meta = $("#notePreviewMeta");
+    meta.replaceChildren();
+    if (isProgressTask(task)) meta.append(createMetaChip(`Progress ${normalizeProgress(task)}%`));
+    else if (task.dueDate) meta.append(createMetaChip(`${formatDate(task)}${task.dueTime ? ` · ${formatTime(task.dueTime)}` : ""}`, isOverdue(task) ? "overdue" : ""));
+    meta.append(createMetaChip(task.priority, `priority-${task.priority}`));
+    $("#notePreviewModal").hidden = false;
+    state.notePreviewOpen = true;
+    document.body.classList.add("modal-open");
+    document.body.style.overflow = "hidden";
+    if (!history.state?.taskoModal) history.pushState({ taskoModal: "note-preview" }, "");
+  }
+
+  function closeNotePreview(fromPop = false) {
+    if ($("#notePreviewModal").hidden) return;
+    $("#notePreviewModal").hidden = true;
+    state.notePreviewOpen = false;
+    document.body.classList.remove("modal-open");
+    document.body.style.overflow = "";
+    if (!fromPop && history.state?.taskoModal === "note-preview") history.back();
+  }
+
+  function openPenaltySnoozeModal(task) {
+    state.activePenaltySnoozeTaskId = task.id;
+    $("#penaltySnoozeTitle").textContent = `Snooze points for ${task.title}`;
+    const options = $("#penaltySnoozeOptions");
+    const fragment = document.createDocumentFragment();
+    for (let days = 2; days <= 10; days += 1) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.dataset.snoozeDays = days;
+      button.textContent = `${days} days`;
+      fragment.append(button);
+    }
+    options.replaceChildren(fragment);
+    $("#penaltySnoozeModal").hidden = false;
+    document.body.style.overflow = "hidden";
+  }
+
+  function closePenaltySnoozeModal() {
+    $("#penaltySnoozeModal").hidden = true;
+    state.activePenaltySnoozeTaskId = null;
+    document.body.style.overflow = "";
+  }
+
+  async function snoozePenalty(days) {
+    const task = state.tasks.find(item => item.id === state.activePenaltySnoozeTaskId);
+    if (!task) return;
+    const until = new Date(Date.now() + days * DAY_MS);
+    task.penaltySnoozedUntil = until.toISOString();
+    task.penaltyIntervalsApplied = 0;
+    task.penaltyCyclePoints = 0;
+    task.penaltyCycleKey = null;
+    await TaskoDB.put(task);
+    closePenaltySnoozeModal();
+    render();
+    showToast(`Point deductions snoozed for ${days} days`);
+  }
+
+  function cardTaskFromEvent(event) {
+    const card = event.target.closest("[data-id]");
+    if (!card) return null;
+    return state.tasks.find(item => item.id === card.dataset.id) || null;
+  }
+
   function updatePermissionUI() {
     const enabled = TaskoNotifications.permission() === "granted";
     $(".permission-dot").classList.toggle("enabled", enabled);
@@ -879,14 +1262,14 @@
     const lineEnd = nextBreak === -1 ? value.length : nextBreak;
     const lines = value.slice(lineStart, lineEnd).split("\n");
     const nonEmptyLines = lines.filter(line => line.trim());
-    const markerPattern = type === "bullet" ? /^\s*•\s+/ : /^\s*\d+\.\s+/;
+    const markerPattern = type === "bullet" ? /^\s*-\s+/ : /^\s*\d+\.\s+/;
     const shouldRemove = nonEmptyLines.length > 0 && nonEmptyLines.every(line => markerPattern.test(line));
     let number = 1;
     const formatted = lines.map(line => {
       const indent = line.match(/^\s*/)?.[0] || "";
-      const content = line.slice(indent.length).replace(/^(?:•|\d+\.)\s*/, "");
+      const content = line.slice(indent.length).replace(/^(?:-|\d+\.)\s*/, "");
       if (shouldRemove) return `${indent}${content}`;
-      const marker = type === "bullet" ? "•" : `${number++}.`;
+      const marker = type === "bullet" ? "-" : `${number++}.`;
       return `${indent}${marker} ${content}`;
     }).join("\n");
     if (value.length - (lineEnd - lineStart) + formatted.length > textarea.maxLength) {
@@ -904,14 +1287,14 @@
     if (caret !== textarea.selectionEnd) return;
     const lineStart = textarea.value.lastIndexOf("\n", Math.max(0, caret - 1)) + 1;
     const currentLine = textarea.value.slice(lineStart, caret);
-    const match = currentLine.match(/^(\s*)(•|\d+\.)\s?(.*)$/);
+    const match = currentLine.match(/^(\s*)(-|\d+\.)\s?(.*)$/);
     if (!match) return;
     event.preventDefault();
     if (!match[3].trim()) {
       textarea.setRangeText("", lineStart, caret, "end");
       return;
     }
-    const marker = match[2] === "•" ? "•" : `${Number.parseInt(match[2], 10) + 1}.`;
+    const marker = match[2] === "-" ? "-" : `${Number.parseInt(match[2], 10) + 1}.`;
     textarea.setRangeText(`\n${match[1]}${marker} `, caret, caret, "end");
   }
 
@@ -930,6 +1313,60 @@
     setTimeout(() => ripple.remove(), 600);
   }
 
+  function progressDragAfterElement(container, y) {
+    return [...container.querySelectorAll(".progress-task-card:not(.dragging)")]
+      .reduce((closest, child) => {
+        const box = child.getBoundingClientRect();
+        const offset = y - box.top - box.height / 2;
+        if (offset < 0 && offset > closest.offset) return { offset, element: child };
+        return closest;
+      }, { offset: Number.NEGATIVE_INFINITY, element: null }).element;
+  }
+
+  function beginProgressDrag(event) {
+    const handle = event.target.closest(".drag-handle");
+    if (!handle) return;
+    const card = handle.closest(".progress-task-card");
+    const stack = card?.closest(".progress-card-stack");
+    if (!card || !stack) return;
+    event.preventDefault();
+    handle.setPointerCapture?.(event.pointerId);
+    state.progressDrag = { card, stack, pointerId: event.pointerId, startY: event.clientY, moved: false };
+    card.classList.add("dragging");
+    document.body.classList.add("is-dragging-progress");
+  }
+
+  function moveProgressDrag(event) {
+    const drag = state.progressDrag;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    if (Math.abs(event.clientY - drag.startY) > 4) drag.moved = true;
+    const after = progressDragAfterElement(drag.stack, event.clientY);
+    if (after) drag.stack.insertBefore(drag.card, after);
+    else drag.stack.append(drag.card);
+  }
+
+  async function endProgressDrag(event) {
+    const drag = state.progressDrag;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    drag.card.classList.remove("dragging");
+    document.body.classList.remove("is-dragging-progress");
+    state.suppressProgressClick = drag.moved;
+    const updates = [];
+    $$(".progress-card-stack").forEach(stack => {
+      [...stack.querySelectorAll(".progress-task-card")].forEach((card, index) => {
+        const task = state.tasks.find(item => item.id === card.dataset.id);
+        if (task && task.progressOrder !== index + 1) {
+          task.progressOrder = index + 1;
+          updates.push(TaskoDB.put(task));
+        }
+      });
+    });
+    state.progressDrag = null;
+    await Promise.all(updates);
+    if (state.suppressProgressClick) setTimeout(() => { state.suppressProgressClick = false; }, 0);
+  }
+
   function bindEvents() {
     document.addEventListener("pointerdown", TaskoNotifications.unlockAudio, { once: true });
     document.addEventListener("click", event => {
@@ -937,19 +1374,46 @@
       const viewButton = event.target.closest("[data-view]");
       if (viewButton) setView(viewButton.dataset.view);
       if (event.target.closest("[data-open-task-modal]")) openTaskModal();
+      if (event.target.closest("[data-open-progress-modal]")) openTaskModal(null, "progress");
       if (event.target.closest("[data-close-modal]")) closeTaskModal();
+      if (event.target.closest("[data-close-note-preview]")) closeNotePreview();
+      if (event.target.closest("[data-close-penalty-snooze]")) closePenaltySnoozeModal();
     });
 
     $("#taskList").addEventListener("click", event => {
       const button = event.target.closest("[data-action]");
       const card = event.target.closest(".task-card");
-      if (!button || !card) return;
+      if (!card) return;
       const task = state.tasks.find(item => item.id === card.dataset.id);
       if (!task) return;
-      if (button.dataset.action === "toggle") toggleTask(task, card);
-      if (button.dataset.action === "edit") openTaskModal(task);
-      if (button.dataset.action === "delete") deleteTask(task, card);
+      if (button) {
+        if (button.dataset.action === "toggle") toggleTask(task, card);
+        if (button.dataset.action === "edit") openTaskModal(task);
+        if (button.dataset.action === "delete") deleteTask(task, card);
+        if (button.dataset.action === "penalty-snooze") openPenaltySnoozeModal(task);
+        return;
+      }
+      if (notesNeedPreview(task)) openNotePreview(task);
     });
+
+    $("#progressList").addEventListener("click", event => {
+      if (state.suppressProgressClick) return;
+      if (event.target.closest(".drag-handle")) return;
+      const task = cardTaskFromEvent(event);
+      if (!task) return;
+      const card = event.target.closest(".progress-task-card");
+      const deltaButton = event.target.closest("[data-progress-delta]");
+      const doneButton = event.target.closest("[data-progress-done]");
+      if (deltaButton) { updateProgressTask(task, Number(deltaButton.dataset.progressDelta)); return; }
+      if (doneButton) { finishProgressTask(task); return; }
+      if (event.target.closest("[data-progress-edit]")) { openTaskModal(task, "progress"); return; }
+      if (event.target.closest("[data-progress-delete]")) { deleteTask(task, card); return; }
+      if (notesNeedPreview(task)) openNotePreview(task);
+    });
+    $("#progressList").addEventListener("pointerdown", beginProgressDrag);
+    $("#progressList").addEventListener("pointermove", moveProgressDrag);
+    $("#progressList").addEventListener("pointerup", endProgressDrag);
+    $("#progressList").addEventListener("pointercancel", endProgressDrag);
 
     $("#taskForm").addEventListener("submit", saveTask);
     $(".notes-tools").addEventListener("click", event => {
@@ -969,6 +1433,10 @@
       closePermissionModal();
     });
     $("#enableNotifications").addEventListener("click", enableNotifications);
+    $("#penaltySnoozeOptions").addEventListener("click", event => {
+      const button = event.target.closest("[data-snooze-days]");
+      if (button) snoozePenalty(Number(button.dataset.snoozeDays));
+    });
     $("#reminderStack").addEventListener("click", event => {
       const button = event.target.closest("[data-reminder]");
       if (button) handleReminderAction(button);
@@ -979,15 +1447,21 @@
       if (event.target !== backdrop) return;
       if (backdrop.id === "taskModal") closeTaskModal();
       if (backdrop.id === "permissionModal") closePermissionModal();
+      if (backdrop.id === "notePreviewModal") closeNotePreview();
+      if (backdrop.id === "penaltySnoozeModal") closePenaltySnoozeModal();
     }));
 
     document.addEventListener("keydown", event => {
-      if (event.key === "Escape") { closeTaskModal(); closePermissionModal(); }
+      if (event.key === "Escape") { closeTaskModal(); closePermissionModal(); closeNotePreview(); closePenaltySnoozeModal(); }
       if (event.key === "/" && !["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName)) {
         event.preventDefault();
         $(".search-box").classList.add("expanded");
         $("#searchInput").focus();
       }
+    });
+
+    window.addEventListener("popstate", () => {
+      if (state.notePreviewOpen) closeNotePreview(true);
     });
 
     $(".search-box > span:first-child").addEventListener("click", () => {
@@ -1025,7 +1499,8 @@
     await cleanupExpiredCompletedTasks();
 
     const params = new URLSearchParams(location.search);
-    if (viewCopy[params.get("view")]) state.view = params.get("view");
+    if (params.get("view") === "upcoming") state.view = "today";
+    else if (viewCopy[params.get("view")]) state.view = params.get("view");
     render();
     updateStarUI();
     if (state.stars >= STAR_CYCLE_TARGET) {
@@ -1043,6 +1518,9 @@
     await checkReminders();
     setInterval(updateCountdowns, 1000);
     setInterval(checkReminders, 30000);
+    setInterval(() => {
+      if ((state.view === "progress" || state.view === "completed") && state.tasks.some(isProgressTask)) render();
+    }, 60000);
     setInterval(async () => {
       if (await cleanupExpiredCompletedTasks()) render();
     }, HOUR_MS);
